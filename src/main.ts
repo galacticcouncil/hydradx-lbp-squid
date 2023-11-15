@@ -192,37 +192,6 @@ async function getPools(
   return await Promise.all(pools);
 }
 
-async function createAccounts(
-  ctx: ProcessorContext<Store>,
-  transferEvents: TransferEvent[]
-): Promise<Map<string, Account>> {
-  const accountIds = new Set<string>();
-  for (let t of transferEvents) {
-    accountIds.add(t.from);
-    accountIds.add(t.to);
-  }
-
-  const accounts = await ctx.store
-    .findBy(Account, { id: In([...accountIds]) })
-    .then((accounts) => {
-      return new Map(accounts.map((a) => [a.id, a]));
-    });
-
-  for (let t of transferEvents) {
-    updateAccounts(t.from);
-    updateAccounts(t.to);
-  }
-
-  function updateAccounts(id: string): void {
-    const acc = accounts.get(id);
-    if (acc == null) {
-      accounts.set(id, new Account({ id }));
-    }
-  }
-
-  return accounts;
-}
-
 function getAccount(m: Map<string, Account>, id: string): Account {
   let acc = m.get(id);
   if (acc == null) {
