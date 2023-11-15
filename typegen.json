@@ -1,0 +1,25 @@
+{
+  "outDir": "src/types",
+  "specVersions": "https://v2.archive.subsquid.io/metadata/hydradx",
+  "pallets": {
+    "Balances": {
+      "events": ["Transfer"],
+      "calls": [],
+      "storage": [],
+      "constants": []
+    },
+    "Tokens": {
+      "events": ["Transfer"],
+      "storage": ["Accounts"]
+    },
+    "ParachainSystem": {
+      "calls": ["set_validation_data"]
+    },
+    "LBP": {
+      "events": ["PoolUpdated", "PoolCreated"]
+    },
+    "System": {
+      "storage": ["Account"]
+    }
+  }
+}
