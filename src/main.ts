@@ -332,7 +332,6 @@ async function getAssetBalance(
   assetId: number,
   account: string
 ): Promise<bigint> {
-  const acc = hexUtil.decodeHex(account);
   if (assetId === 0) {
     return storage.system.account.v100
       .get(block, account)

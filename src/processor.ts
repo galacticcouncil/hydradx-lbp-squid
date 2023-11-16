@@ -20,7 +20,9 @@ export const processor = new SubstrateBatchProcessor()
     chain: {
       // See https://docs.subsquid.io/substrate-indexing/setup/general/#set-data-source
       url: "wss://rpc.hydradx.cloud",
-      rateLimit: 10,
+      capacity: 700,
+      rateLimit: 700,
+      maxBatchCallSize: 700,
     },
   })
   .addEvent({
