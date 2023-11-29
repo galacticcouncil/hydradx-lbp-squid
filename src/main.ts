@@ -293,6 +293,8 @@ async function getPoolPriceData(
 
         blockData.swaps.push(swap);
 
+        // TODO: FIX TOTAL VS CURRENT VOLUME
+
         const currentVolume = blockData.volume.get(
           swap.pool.id + "-" + swap.paraChainBlockHeight
         );
