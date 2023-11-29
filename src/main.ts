@@ -1,40 +1,51 @@
 import { TypeormDatabase, Store } from "@subsquid/typeorm-store";
 import { In } from "typeorm";
-import * as hexUtil from "@subsquid/util-internal-hex";
 import { isNotNullOrUndefined } from "./helpers";
 
 import { processor, ProcessorContext } from "./processor";
 import {
   Account,
-  HistoricalPoolPriceData,
-  LBPPoolData,
+  HistoricalBlockPrice,
   Pool,
+  SwapType,
+  Swap,
   Transfer,
+  HistoricalVolume,
+  HistoricalAssetVolume,
 } from "./model";
 import { events, storage, calls } from "./types/";
-import { BlockHeader } from "@subsquid/substrate-processor";
+import { BlockHeader, Event } from "@subsquid/substrate-processor";
+
+import {
+  ProcessorBlockData,
+  PoolCreatedEvent,
+  TransferEvent,
+  LBPPoolDataUpdate,
+} from "./types";
 
 processor.run(new TypeormDatabase({ supportHotBlocks: true }), async (ctx) => {
-  console.log("Getting new pools...");
-  const poolsData = await getPools(ctx);
-  console.log("Found " + poolsData.length + " pools");
+  const newPoolData = await getPools(ctx);
+  console.log("Found " + newPoolData.length + " pools");
 
-  console.log("Getting new pool updates...");
   const lbpPoolsUpdates = await getLBPPoolUpdates(ctx);
   console.log("Found " + Object.keys(lbpPoolsUpdates).length + " pool updates");
 
-  console.log("Getting new transfers...");
-  const transfersData = await getTransfers(ctx, poolsData);
+  const allPools = await ctx.store.find(Pool);
+  console.log("Got " + allPools.length + " pools from database");
+
+  const transfersData = await getTransfers(ctx, [
+    ...newPoolData.map((p) => p.id),
+    ...allPools.map((p) => p.id),
+  ]);
   console.log("Found " + transfersData.length + " transfers");
 
-  console.log("Mapping new data...");
   let accountIds = new Set<string>();
   for (let t of transfersData) {
     accountIds.add(t.from);
     accountIds.add(t.to);
   }
 
-  for (let p of poolsData) {
+  for (let p of newPoolData) {
     accountIds.add(p.id);
     if (p.lbpPoolData?.owner) accountIds.add(p.lbpPoolData.owner);
     if (p.lbpPoolData?.feeCollector) accountIds.add(p.lbpPoolData.feeCollector);
@@ -53,31 +64,9 @@ processor.run(new TypeormDatabase({ supportHotBlocks: true }), async (ctx) => {
         })
     : new Map();
 
-  let transfers: Transfer[] = [];
+  const newPools: Pool[] = [];
 
-  for (let t of transfersData) {
-    let { id, assetId, extrinsicHash, amount, fee, blockNumber } = t;
-
-    let from = getAccount(accounts, t.from);
-    let to = getAccount(accounts, t.to);
-
-    transfers.push(
-      new Transfer({
-        id,
-        assetId,
-        extrinsicHash,
-        from,
-        to,
-        amount,
-        fee,
-      })
-    );
-  }
-
-  let pools: Pool[] = [];
-  let lbpPoolsData = new Map<string, LBPPoolData>();
-
-  for (let p of poolsData) {
+  for (let p of newPoolData) {
     let {
       id,
       assetAId,
@@ -89,11 +78,19 @@ processor.run(new TypeormDatabase({ supportHotBlocks: true }), async (ctx) => {
       lbpPoolData,
     } = p;
 
+    lbpPoolData = { ...lbpPoolData, ...lbpPoolsUpdates[id] };
+
     if (lbpPoolData) {
-      lbpPoolsData.set(
-        id,
-        new LBPPoolData({
+      newPools.push(
+        new Pool({
           id: id,
+          account: getAccount(accounts, id),
+          assetAId,
+          assetBId,
+          assetABalance,
+          assetBBalance,
+          createdAt,
+          createdAtParaBlock,
           owner: getAccount(accounts, lbpPoolData.owner),
           startBlockNumber: lbpPoolData.startBlockNumber,
           endBlockNumber: lbpPoolData.endBlockNumber,
@@ -104,53 +101,85 @@ processor.run(new TypeormDatabase({ supportHotBlocks: true }), async (ctx) => {
         })
       );
     }
-    pools.push(
-      new Pool({
-        id: id,
-        account: getAccount(accounts, id),
-        assetAId,
-        assetBId,
-        assetABalance,
-        assetBBalance,
-        createdAt,
-        createdAtParaBlock,
+  }
+
+  for (let p in lbpPoolsUpdates) {
+    const poolData = allPools.find((pool) => pool.id == p);
+    const newData = lbpPoolsUpdates[p];
+
+    console.log("Found pool data for pool " + p + "... mapping new data");
+
+    if (!poolData) continue;
+
+    poolData.owner = getAccount(accounts, newData.owner);
+    poolData.feeCollector = getAccount(accounts, newData.feeCollector);
+    poolData.initialWeight = newData.initialWeight;
+    poolData.finalWeight = newData.finalWeight;
+    poolData.repayTarget = newData.repayTarget;
+    poolData.startBlockNumber = newData.startBlockNumber;
+    poolData.endBlockNumber = newData.endBlockNumber;
+  }
+
+  let transfers: Transfer[] = [];
+
+  for (let t of transfersData) {
+    let { id, assetId, extrinsicHash, amount, fee, blockNumber } = t;
+
+    let from = getAccount(accounts, t.from);
+    let to = getAccount(accounts, t.to);
+
+    transfers.push(
+      new Transfer({
+        id,
+        paraChainBlockHeight: blockNumber,
+        assetId,
+        extrinsicHash,
+        from,
+        to,
+        amount,
+        txFee: fee,
       })
     );
   }
 
-  const poolsPriceData: HistoricalPoolPriceData[] = [];
-  console.log("Getting pools from database...");
-  const allPools = await ctx.store.find(Pool);
-  console.log("Got " + allPools.length + " pools from database");
+  const poolPriceData = await getPoolPriceData(
+    ctx,
+    [...allPools, ...newPools],
+    accounts
+  );
 
-  console.log("Getting pool price...");
-  const poolPriceData = await getPoolPriceData(ctx, allPools);
-  console.log("Got " + poolPriceData.length + " pool price data");
+  console.log(
+    "Got " + poolPriceData.poolPrices.length + " pool price data,",
+    " " + poolPriceData.swaps.length + " swaps,",
+    " " + poolPriceData.assetVolume.length + " asset volume data,",
+    " " + poolPriceData.volume.length + " volume data"
+  );
 
-  for (let p of poolPriceData) {
-    poolsPriceData.push(new HistoricalPoolPriceData(p));
-  }
-
-  for (let p in lbpPoolsUpdates) {
-    const data = lbpPoolsData.get(p);
-    const newData = lbpPoolsUpdates[p];
-
-    if (!data) continue;
-
-    data.owner = getAccount(accounts, newData.owner);
-    data.feeCollector = getAccount(accounts, newData.feeCollector);
-    data.initialWeight = newData.initialWeight;
-    data.finalWeight = newData.finalWeight;
-    data.repayTarget = newData.repayTarget;
-    data.startBlockNumber = newData.startBlockNumber;
-    data.endBlockNumber = newData.endBlockNumber;
+  const poolPrices: HistoricalBlockPrice[] = [];
+  for (let p of poolPriceData.poolPrices) {
+    poolPrices.push(new HistoricalBlockPrice(p));
   }
 
   await ctx.store.save(Array.from(accounts.values()));
+  console.log("saving pools");
+  await ctx.store.save([...allPools, ...newPools]);
+  console.log("saving transfers");
   await ctx.store.insert(transfers);
-  await ctx.store.save(pools);
-  await ctx.store.save(Array.from(lbpPoolsData.values()));
-  await ctx.store.insert(poolsPriceData);
+  console.log("saving prices");
+  await ctx.store.insert(poolPrices);
+  console.log("saving swaps");
+  await ctx.store.insert(poolPriceData.swaps);
+  console.log("saving volume");
+  await ctx.store.insert(poolPriceData.volume);
+  console.log("saving asset volume");
+  await ctx.store.insert(poolPriceData.assetVolume);
+
+  console.log("Batch complete");
+  console.log(
+    "Relay block complete: " +
+      poolPriceData.poolPrices[poolPriceData.poolPrices.length - 1]
+        .relayChainBlockHeight
+  );
 });
 
 async function getPools(
@@ -204,48 +233,206 @@ function getAccount(m: Map<string, Account>, id: string): Account {
 
 async function getPoolPriceData(
   ctx: ProcessorContext<Store>,
-  pools: Pool[]
-): Promise<PoolPriceData[]> {
-  let poolPrices: Promise<PoolPriceData | null>[][] = [];
+  pools: Pool[],
+  accounts: Map<string, Account>
+) {
+  let poolPrices: Promise<HistoricalBlockPrice | null>[][] = [];
+  let blocksData: ProcessorBlockData[] = [];
   for (let block of ctx.blocks) {
+    const blockData: ProcessorBlockData = {
+      relayChainBlockHeight: null,
+      paraChainBlockHeight: block.header.height,
+      timestamp: new Date(block.header.timestamp || 0),
+      swaps: [],
+      volume: new Map<string, HistoricalVolume>(),
+      assetVolume: new Map<string, HistoricalAssetVolume>(),
+    };
+
     for (let call of block.calls) {
       if (call.name == calls.parachainSystem.setValidationData.name) {
         let validationData =
           calls.parachainSystem.setValidationData.v100.decode(call);
-        const relayChainBlockNumber =
+        blockData.relayChainBlockHeight =
           validationData.data.validationData.relayParentNumber;
-        const parachainBlockNumber = block.header.height;
+      }
+    }
 
-        poolPrices.push(
-          pools.map(
-            async (p) =>
-              new Promise<PoolPriceData | null>((resolve) => {
-                if (p.createdAtParaBlock > parachainBlockNumber) {
-                  resolve(null);
-                  return;
-                }
+    for (let event of block.events) {
+      if (event.name == events.lbp.buyExecuted.name) {
+        const buyEvent = events.lbp.buyExecuted.v176.decode(event);
+        const swapPool = pools.find(
+          (p) =>
+            (p.assetAId == buyEvent.assetIn &&
+              p.assetBId == buyEvent.assetOut) ||
+            (p.assetBId == buyEvent.assetIn && p.assetAId == buyEvent.assetOut)
+        );
 
-                Promise.all([
-                  getAssetBalance(block.header, p.assetAId, p.id),
-                  getAssetBalance(block.header, p.assetBId, p.id),
-                ]).then(([assetABalance, assetBBalance]) => {
-                  resolve({
-                    id: p.id + "-" + parachainBlockNumber,
-                    assetABalance: assetABalance,
-                    assetBBalance: assetBBalance,
-                    pool: p,
-                    relayChainBlockHeight: relayChainBlockNumber,
-                    paraChainBlockHeight: parachainBlockNumber,
-                  });
-                });
-              })
-          )
+        if (!swapPool) {
+          console.log(
+            `No pool found for event: 
+             ${event.name} ${event.id} ${event.extrinsic?.hash}
+            This is probably a BUG`
+          );
+          continue;
+        }
+
+        const swap = createSwap(
+          event,
+          event.extrinsic?.hash || "",
+          getAccount(accounts, buyEvent.who),
+          buyEvent.assetIn,
+          buyEvent.assetOut,
+          buyEvent.buyPrice,
+          buyEvent.amount,
+          buyEvent.feeAsset,
+          buyEvent.feeAmount,
+          SwapType.BUY,
+          swapPool,
+          blockData
+        );
+
+        blockData.swaps.push(swap);
+
+        const currentVolume = blockData.volume.get(
+          swap.pool.id + "-" + swap.paraChainBlockHeight
+        );
+        const oldVolume = currentVolume || (await getOldVolume(ctx, swap));
+        const newVolume = updateVolume(swap, currentVolume, oldVolume);
+        blockData.volume.set(
+          newVolume.pool.id + "-" + swap.paraChainBlockHeight,
+          newVolume
+        );
+
+        const [assetInVolume, assetOutVolume] = await getAssetVolume(
+          ctx,
+          blockData.assetVolume,
+          swap
+        );
+
+        assetInVolume.volumeIn += swap.assetInAmount;
+        assetInVolume.totalVolumeIn += swap.assetInAmount;
+        assetOutVolume.volumeOut += swap.assetOutAmount;
+        assetOutVolume.totalVolumeOut += swap.assetOutAmount;
+
+        blockData.assetVolume.set(
+          assetInVolume.assetId + "-" + swap.paraChainBlockHeight,
+          assetInVolume
+        );
+        blockData.assetVolume.set(
+          assetOutVolume.assetId + "-" + swap.paraChainBlockHeight,
+          assetOutVolume
+        );
+      }
+
+      if (event.name == events.lbp.sellExecuted.name) {
+        const sellEvent = events.lbp.sellExecuted.v176.decode(event);
+        const swapPool = pools.find(
+          (p) =>
+            (p.assetAId == sellEvent.assetIn &&
+              p.assetBId == sellEvent.assetOut) ||
+            (p.assetBId == sellEvent.assetIn &&
+              p.assetAId == sellEvent.assetOut)
+        );
+
+        if (!swapPool) {
+          console.log(
+            `No pool found for event: 
+             ${event.name} ${event.id} ${event.extrinsic?.hash}
+            This is probably a BUG`
+          );
+          continue;
+        }
+
+        const swap = createSwap(
+          event,
+          event.extrinsic?.hash || "",
+          getAccount(accounts, sellEvent.who),
+          sellEvent.assetIn,
+          sellEvent.assetOut,
+          sellEvent.amount,
+          sellEvent.salePrice,
+          sellEvent.feeAsset,
+          sellEvent.feeAmount,
+          SwapType.SELL,
+          swapPool,
+          blockData
+        );
+
+        blockData.swaps.push(swap);
+
+        const currentVolume = blockData.volume.get(
+          swap.pool.id + "-" + swap.paraChainBlockHeight
+        );
+        const oldVolume = currentVolume || (await getOldVolume(ctx, swap));
+        const newVolume = updateVolume(swap, currentVolume, oldVolume);
+        blockData.volume.set(
+          newVolume.pool.id + "-" + swap.paraChainBlockHeight,
+          newVolume
+        );
+
+        const [assetInVolume, assetOutVolume] = await getAssetVolume(
+          ctx,
+          blockData.assetVolume,
+          swap
+        );
+
+        assetInVolume.volumeIn += swap.assetInAmount;
+        assetInVolume.totalVolumeIn += swap.assetInAmount;
+        assetOutVolume.volumeOut += swap.assetOutAmount;
+        assetOutVolume.totalVolumeOut += swap.assetOutAmount;
+
+        blockData.assetVolume.set(
+          assetInVolume.assetId + "-" + swap.paraChainBlockHeight,
+          assetInVolume
+        );
+        blockData.assetVolume.set(
+          assetOutVolume.assetId + "-" + swap.paraChainBlockHeight,
+          assetOutVolume
         );
       }
     }
+
+    poolPrices.push(
+      pools.map(
+        async (p) =>
+          new Promise<HistoricalBlockPrice | null>((resolve) => {
+            if (p.createdAtParaBlock > blockData.paraChainBlockHeight) {
+              resolve(null);
+              return;
+            }
+
+            Promise.all([
+              getAssetBalance(block.header, p.assetAId, p.id),
+              getAssetBalance(block.header, p.assetBId, p.id),
+            ]).then(([assetABalance, assetBBalance]) => {
+              resolve({
+                id: p.id + "-" + blockData.paraChainBlockHeight,
+                assetAId: p.assetAId,
+                assetBId: p.assetBId,
+                assetABalance: assetABalance,
+                assetBBalance: assetBBalance,
+                assetATotalFees: BigInt(0), // TODO: Fees
+                assetBTotalFees: BigInt(0), // TODO: Fees
+                pool: p,
+                paraChainBlockHeight: blockData.paraChainBlockHeight,
+                relayChainBlockHeight: blockData.relayChainBlockHeight || 0,
+              });
+            });
+          })
+      )
+    );
+
+    blocksData.push(blockData);
   }
 
-  return (await Promise.all(poolPrices.flat())).filter(isNotNullOrUndefined);
+  return {
+    poolPrices: (await Promise.all(poolPrices.flat())).filter(
+      isNotNullOrUndefined
+    ),
+    swaps: blocksData.flatMap((b) => b.swaps),
+    assetVolume: blocksData.flatMap((b) => Array.from(b.assetVolume.values())),
+    volume: blocksData.flatMap((b) => Array.from(b.volume.values())),
+  };
 }
 
 async function getLBPPoolUpdates(ctx: ProcessorContext<Store>) {
@@ -273,7 +460,7 @@ async function getLBPPoolUpdates(ctx: ProcessorContext<Store>) {
 
 function getTransfers(
   ctx: ProcessorContext<Store>,
-  pools: PoolCreatedEvent[]
+  pools: string[]
 ): TransferEvent[] {
   let transfers: TransferEvent[] = [];
   for (let block of ctx.blocks) {
@@ -316,13 +503,190 @@ function getTransfers(
   return transfers;
 }
 
-function isPoolTransfer(
-  pools: PoolCreatedEvent[],
-  from: string,
-  to: string
-): boolean {
+async function getOldVolume(ctx: ProcessorContext<Store>, swap: Swap) {
+  return await ctx.store.findOne(HistoricalVolume, {
+    where: {
+      pool: { id: swap.pool.id },
+    },
+    order: {
+      paraChainBlockHeight: "DESC",
+    },
+  });
+}
+
+function updateVolume(
+  swap: Swap,
+  currentVolume: HistoricalVolume | undefined,
+  oldVolume: HistoricalVolume | undefined
+) {
+  const newVolume = new HistoricalVolume({
+    id: swap.pool.id + "-" + swap.paraChainBlockHeight,
+    pool: swap.pool,
+    assetAId: swap.pool.assetAId,
+    assetBId: swap.pool.assetBId,
+    averagePrice: 0,
+    assetAVolumeIn: currentVolume?.assetAVolumeIn || BigInt(0),
+    assetAVolumeOut: currentVolume?.assetAVolumeOut || BigInt(0),
+    assetATotalVolumeIn:
+      currentVolume?.assetATotalVolumeIn ||
+      oldVolume?.assetATotalVolumeIn ||
+      BigInt(0),
+    assetATotalVolumeOut:
+      currentVolume?.assetATotalVolumeOut ||
+      oldVolume?.assetATotalVolumeOut ||
+      BigInt(0),
+    assetBVolumeIn: currentVolume?.assetBVolumeIn || BigInt(0),
+    assetBVolumeOut: currentVolume?.assetBVolumeOut || BigInt(0),
+    assetBTotalVolumeIn:
+      currentVolume?.assetBTotalVolumeIn ||
+      oldVolume?.assetBTotalVolumeIn ||
+      BigInt(0),
+    assetBTotalVolumeOut:
+      currentVolume?.assetBTotalVolumeOut ||
+      oldVolume?.assetBTotalVolumeOut ||
+      BigInt(0),
+    relayChainBlockHeight: swap.relayChainBlockHeight,
+    paraChainBlockHeight: swap.paraChainBlockHeight,
+  });
+
+  const assetAVolumeIn =
+    swap.assetInId === newVolume.assetAId ? swap.assetInAmount : BigInt(0);
+  const assetBVolumeIn =
+    swap.assetInId === newVolume.assetBId ? swap.assetInAmount : BigInt(0);
+  const assetAVolumeOut =
+    swap.assetOutId === newVolume.assetAId ? swap.assetOutAmount : BigInt(0);
+  const assetBVolumeOut =
+    swap.assetOutId === newVolume.assetBId ? swap.assetOutAmount : BigInt(0);
+
+  newVolume.assetAVolumeIn += assetAVolumeIn;
+  newVolume.assetAVolumeOut += assetAVolumeOut;
+  newVolume.assetATotalVolumeIn += assetAVolumeIn;
+  newVolume.assetATotalVolumeOut += assetAVolumeOut;
+
+  newVolume.assetBVolumeIn += assetBVolumeIn;
+  newVolume.assetBVolumeOut += assetBVolumeOut;
+  newVolume.assetBTotalVolumeIn += assetBVolumeIn;
+  newVolume.assetBTotalVolumeOut += assetBVolumeOut;
+
+  return newVolume;
+}
+
+async function getAssetVolume(
+  ctx: ProcessorContext<Store>,
+  volume: Map<string, HistoricalAssetVolume>,
+  swap: Swap
+) {
+  const currentAssetInVolume = volume.get(
+    swap.assetInId + "-" + swap.paraChainBlockHeight
+  );
+  const oldAssetInVolume =
+    currentAssetInVolume ||
+    (await ctx.store.findOne(HistoricalAssetVolume, {
+      where: {
+        assetId: swap.assetInId,
+      },
+      order: {
+        paraChainBlockHeight: "DESC",
+      },
+    }));
+
+  const assetInVolume = initAssetVolume(
+    swap.assetInId,
+    swap.paraChainBlockHeight,
+    swap.relayChainBlockHeight,
+    currentAssetInVolume?.volumeIn || BigInt(0),
+    BigInt(0),
+    currentAssetInVolume?.totalVolumeIn ||
+      oldAssetInVolume?.totalVolumeIn ||
+      BigInt(0),
+    BigInt(0)
+  );
+
+  const currentAssetOutVolume = volume.get(
+    swap.assetOutId + "-" + swap.paraChainBlockHeight
+  );
+  const oldAssetOutVolume =
+    currentAssetOutVolume ||
+    (await ctx.store.findOne(HistoricalAssetVolume, {
+      where: {
+        assetId: swap.assetOutId,
+      },
+      order: {
+        paraChainBlockHeight: "DESC",
+      },
+    }));
+
+  const assetOutVolume = initAssetVolume(
+    swap.assetOutId,
+    swap.paraChainBlockHeight,
+    swap.relayChainBlockHeight,
+    BigInt(0),
+    currentAssetOutVolume?.volumeOut || BigInt(0),
+    BigInt(0),
+    currentAssetOutVolume?.totalVolumeOut ||
+      oldAssetOutVolume?.totalVolumeOut ||
+      BigInt(0)
+  );
+
+  return [assetInVolume, assetOutVolume];
+}
+
+function initAssetVolume(
+  assetId: number,
+  parachainBlockHeight: number,
+  relayChainBlockHeight: number,
+  volumeIn: bigint,
+  volumeOut: bigint,
+  totalVolumeIn: bigint,
+  totalVolumeOut: bigint
+) {
+  return new HistoricalAssetVolume({
+    id: assetId + "-" + parachainBlockHeight,
+    assetId: assetId,
+    volumeIn: volumeIn,
+    volumeOut: volumeOut,
+    totalVolumeIn: totalVolumeIn,
+    totalVolumeOut: totalVolumeOut,
+    relayChainBlockHeight: relayChainBlockHeight,
+    paraChainBlockHeight: parachainBlockHeight,
+  });
+}
+
+function createSwap(
+  event: Event,
+  hash: string,
+  account: Account,
+  assetIn: number,
+  assetOut: number,
+  amountIn: bigint,
+  amountOut: bigint,
+  feeAsset: number,
+  feeAmount: bigint,
+  swapType: SwapType,
+  pool: Pool,
+  blockData: ProcessorBlockData
+) {
+  return new Swap({
+    id: event.id,
+    account: account,
+    extrinsicHash: hash,
+    assetInId: assetIn,
+    assetInAmount: amountIn,
+    assetInFee: feeAsset === assetIn ? feeAmount : BigInt(0),
+    assetOutId: assetOut,
+    assetOutAmount: amountOut,
+    assetOutFee: feeAsset === assetOut ? feeAmount : BigInt(0),
+    price: 0, // TODO: (sellEvent.sellPrice * BigInt(1000000000) / sellEvent.amount),
+    pool: pool,
+    relayChainBlockHeight: blockData.relayChainBlockHeight || 0,
+    paraChainBlockHeight: blockData.paraChainBlockHeight,
+    type: swapType,
+  });
+}
+
+function isPoolTransfer(pools: string[], from: string, to: string): boolean {
   for (let p of pools) {
-    if (p.id == from || p.id == to) return true;
+    if (p == from || p == to) return true;
   }
   return false;
 }

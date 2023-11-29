@@ -1,3 +1,8 @@
+enum SwapType {
+  BUY
+  SELL
+}
+
 type Account @entity {
   "Account pubkey"
   id: ID!
@@ -6,25 +11,15 @@ type Account @entity {
 }
 
 type Transfer @entity {
+  "TxId"
   id: ID!
+  paraChainBlockHeight: Int!
   assetId: Int! @index
   extrinsicHash: String @index
   from: Account!
   to: Account!
-  amount: BigInt! @index
-  fee: BigInt!
-}
-
-type LBPPoolData @entity {
-  id: ID!
-  owner: Account
-  feeCollector: Account
-  fee: [Int]
-  startBlockNumber: Int
-  endBlockNumber: Int
-  repayTarget: BigInt
-  initialWeight: Int
-  finalWeight: Int
+  amount: BigInt!
+  txFee: BigInt!
 }
 
 type Pool @entity {
@@ -34,17 +29,80 @@ type Pool @entity {
   assetBId: Int!
   assetABalance: BigInt!
   assetBBalance: BigInt!
-  createdAtParaBlock: Int!
   createdAt: DateTime!
-  historicalBalances: [HistoricalPoolPriceData!]! @derivedFrom(field: "pool")
+  createdAtParaBlock: Int!
+  startBlockNumber: Int
+  endBlockNumber: Int
+  fee: [Int]
+  feeCollector: Account
+  repayTarget: BigInt
+  initialWeight: Int
+  finalWeight: Int
+  owner: Account
+  historicalBlockPrices: [HistoricalBlockPrice!]! @derivedFrom(field: "pool")
+  historicalVolume: [HistoricalVolume!]! @derivedFrom(field: "pool")
+  swaps: [Swap!]! @derivedFrom(field: "pool")
 }
 
-type HistoricalPoolPriceData @entity {
+type HistoricalAssetVolume @entity {
+  "AssetId-paraChainBlockHeight"
+  id: ID!
+  assetId: Int!
+  volumeIn: BigInt!
+  volumeOut: BigInt!
+  totalVolumeIn: BigInt!
+  totalVolumeOut: BigInt!
+  relayChainBlockHeight: Int!
+  paraChainBlockHeight: Int!
+}
+
+type HistoricalBlockPrice @entity {
   "PoolId-paraChainBlockHeight"
   id: ID!
+  pool: Pool!
+  assetAId: Int!
+  assetBId: Int!
   assetABalance: BigInt!
   assetBBalance: BigInt!
+  assetATotalFees: BigInt!
+  assetBTotalFees: BigInt!
+  relayChainBlockHeight: Int!
+  paraChainBlockHeight: Int!
+}
+
+type HistoricalVolume @entity {
+  "PoolId-paraChainBlockHeight"
+  id: ID!
   pool: Pool!
+  assetAId: Int!
+  assetBId: Int!
+  averagePrice: Float!
+  assetATotalVolumeIn: BigInt!
+  assetAVolumeIn: BigInt!
+  assetAVolumeOut: BigInt!
+  assetATotalVolumeOut: BigInt!
+  assetBVolumeIn: BigInt!
+  assetBVolumeOut: BigInt!
+  assetBTotalVolumeIn: BigInt!
+  assetBTotalVolumeOut: BigInt!
+  relayChainBlockHeight: Int!
+  paraChainBlockHeight: Int!
+}
+
+type Swap @entity {
+  "TxId"
+  id: ID!
+  account: Account!
+  extrinsicHash: String @index
+  assetInId: Int!
+  assetInAmount: BigInt!
+  assetInFee: BigInt!
+  assetOutId: Int!
+  assetOutAmount: BigInt!
+  assetOutFee: BigInt!
+  price: Float!
+  pool: Pool!
+  type: SwapType!
   relayChainBlockHeight: Int!
   paraChainBlockHeight: Int!
 }

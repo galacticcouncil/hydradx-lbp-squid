@@ -8,8 +8,14 @@ export class Transfer {
         Object.assign(this, props)
     }
 
+    /**
+     * TxId
+     */
     @PrimaryColumn_()
     id!: string
+
+    @Column_("int4", {nullable: false})
+    paraChainBlockHeight!: number
 
     @Index_()
     @Column_("int4", {nullable: false})
@@ -27,10 +33,9 @@ export class Transfer {
     @ManyToOne_(() => Account, {nullable: true})
     to!: Account
 
-    @Index_()
     @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
     amount!: bigint
 
     @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
-    fee!: bigint
+    txFee!: bigint
 }

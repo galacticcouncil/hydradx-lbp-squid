@@ -28,3 +28,41 @@ export const poolUpdated =  {
         })
     ),
 }
+
+export const sellExecuted =  {
+    name: 'LBP.SellExecuted',
+    /**
+     * Sale executed.
+     */
+    v176: new EventType(
+        'LBP.SellExecuted',
+        sts.struct({
+            who: v176.AccountId32,
+            assetIn: sts.number(),
+            assetOut: sts.number(),
+            amount: sts.bigint(),
+            salePrice: sts.bigint(),
+            feeAsset: sts.number(),
+            feeAmount: sts.bigint(),
+        })
+    ),
+}
+
+export const buyExecuted =  {
+    name: 'LBP.BuyExecuted',
+    /**
+     * Purchase executed.
+     */
+    v176: new EventType(
+        'LBP.BuyExecuted',
+        sts.struct({
+            who: v176.AccountId32,
+            assetOut: sts.number(),
+            assetIn: sts.number(),
+            amount: sts.bigint(),
+            buyPrice: sts.bigint(),
+            feeAsset: sts.number(),
+            feeAmount: sts.bigint(),
+        })
+    ),
+}

@@ -1,3 +1,6 @@
+import { HistoricalVolume, Swap, Pool, HistoricalAssetVolume } from "./model";
+import type * as base from "@subsquid/substrate-data";
+
 interface TransferEvent {
   id: string;
   assetId: number;
@@ -32,11 +35,16 @@ interface PoolCreatedEvent {
   lbpPoolData?: LBPPoolDataUpdate;
 }
 
-interface PoolPriceData {
-  id: string;
-  assetABalance: bigint;
-  assetBBalance: bigint;
-  pool: Pool;
-  relayChainBlockHeight: number;
+interface ProcessorBlockData {
+  timestamp: Date | null;
   paraChainBlockHeight: number;
+  relayChainBlockHeight: number | null;
+  swaps: Swap[];
+  volume: Map<string, HistoricalVolume>;
+  assetVolume: Map<string, HistoricalAssetVolume>;
+}
+
+interface FullExtrinsic extends base.Extrinsic {
+  success: boolean;
+  hash: base.Bytes;
 }

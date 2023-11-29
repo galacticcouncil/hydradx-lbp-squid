@@ -1,6 +1,6 @@
 // OMG Typescript...
 export function isNotNullOrUndefined<T extends Object>(
-  input: null | undefined | T,
+  input: null | undefined | T
 ): input is T {
-  return input != null
+  return input != null;
 }

@@ -16,7 +16,7 @@
       "calls": ["set_validation_data"]
     },
     "LBP": {
-      "events": ["PoolUpdated", "PoolCreated"]
+      "events": ["PoolUpdated", "PoolCreated", "SellExecuted", "BuyExecuted"]
     },
     "System": {
       "storage": ["Account"]
