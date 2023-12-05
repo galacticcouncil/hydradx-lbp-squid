@@ -238,14 +238,15 @@ async function getPoolPriceData(
 ) {
   let poolPrices: Promise<HistoricalBlockPrice | null>[][] = [];
   let blocksData: ProcessorBlockData[] = [];
+  let volume = new Map<string, HistoricalVolume>();
+  let assetVolume = new Map<string, HistoricalAssetVolume>();
+
   for (let block of ctx.blocks) {
     const blockData: ProcessorBlockData = {
       relayChainBlockHeight: null,
       paraChainBlockHeight: block.header.height,
       timestamp: new Date(block.header.timestamp || 0),
       swaps: [],
-      volume: new Map<string, HistoricalVolume>(),
-      assetVolume: new Map<string, HistoricalAssetVolume>(),
     };
 
     for (let call of block.calls) {
@@ -293,21 +294,23 @@ async function getPoolPriceData(
 
         blockData.swaps.push(swap);
 
-        // TODO: FIX TOTAL VS CURRENT VOLUME
-
-        const currentVolume = blockData.volume.get(
+        const currentVolume = volume.get(
           swap.pool.id + "-" + swap.paraChainBlockHeight
         );
-        const oldVolume = currentVolume || (await getOldVolume(ctx, swap));
+        const oldVolume =
+          currentVolume ||
+          getLastVolumeFromCache(volume, swap) ||
+          (await getOldVolume(ctx, swap));
         const newVolume = updateVolume(swap, currentVolume, oldVolume);
-        blockData.volume.set(
+
+        volume.set(
           newVolume.pool.id + "-" + swap.paraChainBlockHeight,
           newVolume
         );
 
         const [assetInVolume, assetOutVolume] = await getAssetVolume(
           ctx,
-          blockData.assetVolume,
+          assetVolume,
           swap
         );
 
@@ -316,11 +319,11 @@ async function getPoolPriceData(
         assetOutVolume.volumeOut += swap.assetOutAmount;
         assetOutVolume.totalVolumeOut += swap.assetOutAmount;
 
-        blockData.assetVolume.set(
+        assetVolume.set(
           assetInVolume.assetId + "-" + swap.paraChainBlockHeight,
           assetInVolume
         );
-        blockData.assetVolume.set(
+        assetVolume.set(
           assetOutVolume.assetId + "-" + swap.paraChainBlockHeight,
           assetOutVolume
         );
@@ -362,19 +365,23 @@ async function getPoolPriceData(
 
         blockData.swaps.push(swap);
 
-        const currentVolume = blockData.volume.get(
+        const currentVolume = volume.get(
           swap.pool.id + "-" + swap.paraChainBlockHeight
         );
-        const oldVolume = currentVolume || (await getOldVolume(ctx, swap));
+        const oldVolume =
+          currentVolume ||
+          getLastVolumeFromCache(volume, swap) ||
+          (await getOldVolume(ctx, swap));
         const newVolume = updateVolume(swap, currentVolume, oldVolume);
-        blockData.volume.set(
+
+        volume.set(
           newVolume.pool.id + "-" + swap.paraChainBlockHeight,
           newVolume
         );
 
         const [assetInVolume, assetOutVolume] = await getAssetVolume(
           ctx,
-          blockData.assetVolume,
+          assetVolume,
           swap
         );
 
@@ -383,11 +390,11 @@ async function getPoolPriceData(
         assetOutVolume.volumeOut += swap.assetOutAmount;
         assetOutVolume.totalVolumeOut += swap.assetOutAmount;
 
-        blockData.assetVolume.set(
+        assetVolume.set(
           assetInVolume.assetId + "-" + swap.paraChainBlockHeight,
           assetInVolume
         );
-        blockData.assetVolume.set(
+        assetVolume.set(
           assetOutVolume.assetId + "-" + swap.paraChainBlockHeight,
           assetOutVolume
         );
@@ -432,8 +439,8 @@ async function getPoolPriceData(
       isNotNullOrUndefined
     ),
     swaps: blocksData.flatMap((b) => b.swaps),
-    assetVolume: blocksData.flatMap((b) => Array.from(b.assetVolume.values())),
-    volume: blocksData.flatMap((b) => Array.from(b.volume.values())),
+    assetVolume: Array.from(assetVolume.values()),
+    volume: Array.from(volume.values()),
   };
 }
 
@@ -578,11 +585,18 @@ async function getAssetVolume(
   volume: Map<string, HistoricalAssetVolume>,
   swap: Swap
 ) {
+  // Find current block volume
   const currentAssetInVolume = volume.get(
     swap.assetInId + "-" + swap.paraChainBlockHeight
   );
+
+  // If not found find last volume in cache
+  const cachedVolumeIn = getLastAssetVolumeFromCache(volume, swap.assetInId);
+
+  // Last known volume for total volume
   const oldAssetInVolume =
     currentAssetInVolume ||
+    cachedVolumeIn ||
     (await ctx.store.findOne(HistoricalAssetVolume, {
       where: {
         assetId: swap.assetInId,
@@ -592,23 +606,29 @@ async function getAssetVolume(
       },
     }));
 
+  // Create new entry
   const assetInVolume = initAssetVolume(
     swap.assetInId,
     swap.paraChainBlockHeight,
     swap.relayChainBlockHeight,
     currentAssetInVolume?.volumeIn || BigInt(0),
     BigInt(0),
-    currentAssetInVolume?.totalVolumeIn ||
-      oldAssetInVolume?.totalVolumeIn ||
-      BigInt(0),
+    oldAssetInVolume?.totalVolumeIn || BigInt(0),
     BigInt(0)
   );
 
+  // Find current block volume
   const currentAssetOutVolume = volume.get(
     swap.assetOutId + "-" + swap.paraChainBlockHeight
   );
+
+  // If not found find last volume in cache
+  const cachedVolumeOut = getLastAssetVolumeFromCache(volume, swap.assetOutId);
+
+  // Last known volume for total volume
   const oldAssetOutVolume =
     currentAssetOutVolume ||
+    cachedVolumeOut ||
     (await ctx.store.findOne(HistoricalAssetVolume, {
       where: {
         assetId: swap.assetOutId,
@@ -625,9 +645,7 @@ async function getAssetVolume(
     BigInt(0),
     currentAssetOutVolume?.volumeOut || BigInt(0),
     BigInt(0),
-    currentAssetOutVolume?.totalVolumeOut ||
-      oldAssetOutVolume?.totalVolumeOut ||
-      BigInt(0)
+    oldAssetOutVolume?.totalVolumeOut || BigInt(0)
   );
 
   return [assetInVolume, assetOutVolume];
@@ -684,6 +702,36 @@ function createSwap(
     paraChainBlockHeight: blockData.paraChainBlockHeight,
     type: swapType,
   });
+}
+
+function getLastAssetVolumeFromCache(
+  volume: Map<string, HistoricalAssetVolume>,
+  assetId: number
+) {
+  return volume.get(
+    Array.from(volume.keys())
+      .filter((k) => {
+        return k.startsWith(assetId + "-");
+      })
+      .sort((a, b) => {
+        return parseInt(b.split("-")[1]) - parseInt(a.split("-")[1]);
+      })[0]
+  );
+}
+
+function getLastVolumeFromCache(
+  volume: Map<string, HistoricalVolume>,
+  swap: Swap
+) {
+  return volume.get(
+    Array.from(volume.keys())
+      .filter((k) => {
+        return k.startsWith(swap.pool.id + "-");
+      })
+      .sort((a, b) => {
+        return parseInt(b.split("-")[1]) - parseInt(a.split("-")[1]);
+      })[0]
+  );
 }
 
 function isPoolTransfer(pools: string[], from: string, to: string): boolean {

@@ -40,8 +40,6 @@ interface ProcessorBlockData {
   paraChainBlockHeight: number;
   relayChainBlockHeight: number | null;
   swaps: Swap[];
-  volume: Map<string, HistoricalVolume>;
-  assetVolume: Map<string, HistoricalAssetVolume>;
 }
 
 interface FullExtrinsic extends base.Extrinsic {
