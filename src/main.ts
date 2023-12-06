@@ -221,16 +221,6 @@ async function getPools(
   return await Promise.all(pools);
 }
 
-function getAccount(m: Map<string, Account>, id: string): Account {
-  let acc = m.get(id);
-  if (acc == null) {
-    acc = new Account();
-    acc.id = id;
-    m.set(id, acc);
-  }
-  return acc;
-}
-
 async function getPoolPriceData(
   ctx: ProcessorContext<Store>,
   pools: Pool[],
@@ -269,15 +259,11 @@ async function getPoolPriceData(
         );
 
         if (!swapPool) {
-          console.log(
-            `No pool found for event: 
-             ${event.name} ${event.id} ${event.extrinsic?.hash}
-            This is probably a BUG`
-          );
+          console.log(`No pool found for event: ${event.name} ${event.id}`);
           continue;
         }
 
-        const swap = createSwap(
+        const swap = initSwap(
           event,
           event.extrinsic?.hash || "",
           getAccount(accounts, buyEvent.who),
@@ -294,39 +280,7 @@ async function getPoolPriceData(
 
         blockData.swaps.push(swap);
 
-        const currentVolume = volume.get(
-          swap.pool.id + "-" + swap.paraChainBlockHeight
-        );
-        const oldVolume =
-          currentVolume ||
-          getLastVolumeFromCache(volume, swap) ||
-          (await getOldVolume(ctx, swap));
-        const newVolume = updateVolume(swap, currentVolume, oldVolume);
-
-        volume.set(
-          newVolume.pool.id + "-" + swap.paraChainBlockHeight,
-          newVolume
-        );
-
-        const [assetInVolume, assetOutVolume] = await getAssetVolume(
-          ctx,
-          assetVolume,
-          swap
-        );
-
-        assetInVolume.volumeIn += swap.assetInAmount;
-        assetInVolume.totalVolumeIn += swap.assetInAmount;
-        assetOutVolume.volumeOut += swap.assetOutAmount;
-        assetOutVolume.totalVolumeOut += swap.assetOutAmount;
-
-        assetVolume.set(
-          assetInVolume.assetId + "-" + swap.paraChainBlockHeight,
-          assetInVolume
-        );
-        assetVolume.set(
-          assetOutVolume.assetId + "-" + swap.paraChainBlockHeight,
-          assetOutVolume
-        );
+        await handleVolumeUpdates(ctx, volume, assetVolume, swap);
       }
 
       if (event.name == events.lbp.sellExecuted.name) {
@@ -340,15 +294,11 @@ async function getPoolPriceData(
         );
 
         if (!swapPool) {
-          console.log(
-            `No pool found for event: 
-             ${event.name} ${event.id} ${event.extrinsic?.hash}
-            This is probably a BUG`
-          );
+          console.log(`No pool found for event: ${event.name} ${event.id}`);
           continue;
         }
 
-        const swap = createSwap(
+        const swap = initSwap(
           event,
           event.extrinsic?.hash || "",
           getAccount(accounts, sellEvent.who),
@@ -365,39 +315,7 @@ async function getPoolPriceData(
 
         blockData.swaps.push(swap);
 
-        const currentVolume = volume.get(
-          swap.pool.id + "-" + swap.paraChainBlockHeight
-        );
-        const oldVolume =
-          currentVolume ||
-          getLastVolumeFromCache(volume, swap) ||
-          (await getOldVolume(ctx, swap));
-        const newVolume = updateVolume(swap, currentVolume, oldVolume);
-
-        volume.set(
-          newVolume.pool.id + "-" + swap.paraChainBlockHeight,
-          newVolume
-        );
-
-        const [assetInVolume, assetOutVolume] = await getAssetVolume(
-          ctx,
-          assetVolume,
-          swap
-        );
-
-        assetInVolume.volumeIn += swap.assetInAmount;
-        assetInVolume.totalVolumeIn += swap.assetInAmount;
-        assetOutVolume.volumeOut += swap.assetOutAmount;
-        assetOutVolume.totalVolumeOut += swap.assetOutAmount;
-
-        assetVolume.set(
-          assetInVolume.assetId + "-" + swap.paraChainBlockHeight,
-          assetInVolume
-        );
-        assetVolume.set(
-          assetOutVolume.assetId + "-" + swap.paraChainBlockHeight,
-          assetOutVolume
-        );
+        await handleVolumeUpdates(ctx, volume, assetVolume, swap);
       }
     }
 
@@ -512,17 +430,6 @@ function getTransfers(
   return transfers;
 }
 
-async function getOldVolume(ctx: ProcessorContext<Store>, swap: Swap) {
-  return await ctx.store.findOne(HistoricalVolume, {
-    where: {
-      pool: { id: swap.pool.id },
-    },
-    order: {
-      paraChainBlockHeight: "DESC",
-    },
-  });
-}
-
 function updateVolume(
   swap: Swap,
   currentVolume: HistoricalVolume | undefined,
@@ -578,6 +485,57 @@ function updateVolume(
   newVolume.assetBTotalVolumeOut += assetBVolumeOut;
 
   return newVolume;
+}
+
+async function handleVolumeUpdates(
+  ctx: ProcessorContext<Store>,
+  volume: Map<string, HistoricalVolume>,
+  assetVolume: Map<string, HistoricalAssetVolume>,
+  swap: Swap
+) {
+  const currentVolume = volume.get(
+    swap.pool.id + "-" + swap.paraChainBlockHeight
+  );
+
+  const oldVolume =
+    currentVolume ||
+    getLastVolumeFromCache(volume, swap) ||
+    (await getOldVolume(ctx, swap));
+
+  const newVolume = updateVolume(swap, currentVolume, oldVolume);
+
+  volume.set(newVolume.pool.id + "-" + swap.paraChainBlockHeight, newVolume);
+
+  const [assetInVolume, assetOutVolume] = await getAssetVolume(
+    ctx,
+    assetVolume,
+    swap
+  );
+
+  assetInVolume.volumeIn += swap.assetInAmount;
+  assetInVolume.totalVolumeIn += swap.assetInAmount;
+  assetOutVolume.volumeOut += swap.assetOutAmount;
+  assetOutVolume.totalVolumeOut += swap.assetOutAmount;
+
+  assetVolume.set(
+    assetInVolume.assetId + "-" + swap.paraChainBlockHeight,
+    assetInVolume
+  );
+  assetVolume.set(
+    assetOutVolume.assetId + "-" + swap.paraChainBlockHeight,
+    assetOutVolume
+  );
+}
+
+async function getOldVolume(ctx: ProcessorContext<Store>, swap: Swap) {
+  return await ctx.store.findOne(HistoricalVolume, {
+    where: {
+      pool: { id: swap.pool.id },
+    },
+    order: {
+      paraChainBlockHeight: "DESC",
+    },
+  });
 }
 
 async function getAssetVolume(
@@ -672,7 +630,7 @@ function initAssetVolume(
   });
 }
 
-function createSwap(
+function initSwap(
   event: Event,
   hash: string,
   account: Account,
@@ -759,4 +717,14 @@ async function getAssetBalance(
         return accountInfo?.free || BigInt(0);
       });
   }
+}
+
+function getAccount(m: Map<string, Account>, id: string): Account {
+  let acc = m.get(id);
+  if (acc == null) {
+    acc = new Account();
+    acc.id = id;
+    m.set(id, acc);
+  }
+  return acc;
 }
