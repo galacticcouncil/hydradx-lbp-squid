@@ -77,9 +77,9 @@ type HistoricalVolume @entity {
   assetAId: Int!
   assetBId: Int!
   averagePrice: Float!
-  assetATotalVolumeIn: BigInt!
   assetAVolumeIn: BigInt!
   assetAVolumeOut: BigInt!
+  assetATotalVolumeIn: BigInt!
   assetATotalVolumeOut: BigInt!
   assetBVolumeIn: BigInt!
   assetBVolumeOut: BigInt!

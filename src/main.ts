@@ -1,6 +1,7 @@
 import { TypeormDatabase, Store } from "@subsquid/typeorm-store";
 import { In } from "typeorm";
 import { isNotNullOrUndefined } from "./helpers";
+import { BigNumber } from "bignumber.js";
 
 import { processor, ProcessorContext } from "./processor";
 import {
@@ -107,7 +108,7 @@ processor.run(new TypeormDatabase({ supportHotBlocks: true }), async (ctx) => {
     const poolData = allPools.find((pool) => pool.id == p);
     const newData = lbpPoolsUpdates[p];
 
-    console.log("Found pool data for pool " + p + "... mapping new data");
+    console.log(`Found pool data for pool ${p}... mapping new data`);
 
     if (!poolData) continue;
 
@@ -149,10 +150,10 @@ processor.run(new TypeormDatabase({ supportHotBlocks: true }), async (ctx) => {
   );
 
   console.log(
-    "Got " + poolPriceData.poolPrices.length + " pool price data,",
-    " " + poolPriceData.swaps.length + " swaps,",
-    " " + poolPriceData.assetVolume.length + " asset volume data,",
-    " " + poolPriceData.volume.length + " volume data"
+    `Got ${poolPriceData.poolPrices.length} pool price data, 
+    ${poolPriceData.swaps.length} swaps, 
+    ${poolPriceData.assetVolume.length} asset volume data, 
+    ${poolPriceData.volume.length} volume data`
   );
 
   const poolPrices: HistoricalBlockPrice[] = [];
@@ -269,8 +270,8 @@ async function getPoolPriceData(
           getAccount(accounts, buyEvent.who),
           buyEvent.assetIn,
           buyEvent.assetOut,
-          buyEvent.buyPrice,
           buyEvent.amount,
+          buyEvent.buyPrice,
           buyEvent.feeAsset,
           buyEvent.feeAmount,
           SwapType.BUY,
@@ -304,7 +305,9 @@ async function getPoolPriceData(
           getAccount(accounts, sellEvent.who),
           sellEvent.assetIn,
           sellEvent.assetOut,
-          sellEvent.amount,
+          sellEvent.assetIn === sellEvent.feeAsset
+            ? sellEvent.amount + sellEvent.feeAmount
+            : sellEvent.amount,
           sellEvent.salePrice,
           sellEvent.feeAsset,
           sellEvent.feeAmount,
@@ -484,6 +487,34 @@ function updateVolume(
   newVolume.assetBTotalVolumeIn += assetBVolumeIn;
   newVolume.assetBTotalVolumeOut += assetBVolumeOut;
 
+  const totalVolume = oldVolume
+    ? oldVolume.assetATotalVolumeIn + oldVolume.assetATotalVolumeOut
+    : BigInt(0);
+
+  const volume = newVolume.assetAVolumeIn + newVolume.assetAVolumeOut;
+
+  const price =
+    swap.assetInId === swap.pool.assetAId ? swap.price : 1 / swap.price;
+
+  const oldPrice = oldVolume?.averagePrice || 0;
+
+  const averagePrice = oldPrice
+    ? new BigNumber(totalVolume.toString())
+        .multipliedBy(oldPrice)
+        .plus(new BigNumber(volume.toString()).multipliedBy(price))
+        .dividedBy(
+          new BigNumber(totalVolume.toString()).plus(volume.toString())
+        )
+        .toNumber()
+    : price;
+
+  newVolume.averagePrice = averagePrice;
+
+  console.log("total vol:", totalVolume.toString());
+  console.log("vol:", volume.toString());
+  console.log("price:", price);
+  console.log("average price:", averagePrice);
+
   return newVolume;
 }
 
@@ -504,18 +535,13 @@ async function handleVolumeUpdates(
 
   const newVolume = updateVolume(swap, currentVolume, oldVolume);
 
-  volume.set(newVolume.pool.id + "-" + swap.paraChainBlockHeight, newVolume);
+  volume.set(swap.pool.id + "-" + swap.paraChainBlockHeight, newVolume);
 
-  const [assetInVolume, assetOutVolume] = await getAssetVolume(
+  const [assetInVolume, assetOutVolume] = await getNewAssetVolume(
     ctx,
     assetVolume,
     swap
   );
-
-  assetInVolume.volumeIn += swap.assetInAmount;
-  assetInVolume.totalVolumeIn += swap.assetInAmount;
-  assetOutVolume.volumeOut += swap.assetOutAmount;
-  assetOutVolume.totalVolumeOut += swap.assetOutAmount;
 
   assetVolume.set(
     assetInVolume.assetId + "-" + swap.paraChainBlockHeight,
@@ -538,7 +564,7 @@ async function getOldVolume(ctx: ProcessorContext<Store>, swap: Swap) {
   });
 }
 
-async function getAssetVolume(
+async function getNewAssetVolume(
   ctx: ProcessorContext<Store>,
   volume: Map<string, HistoricalAssetVolume>,
   swap: Swap
@@ -548,8 +574,13 @@ async function getAssetVolume(
     swap.assetInId + "-" + swap.paraChainBlockHeight
   );
 
+  const currentAssetOutVolume = volume.get(
+    swap.assetOutId + "-" + swap.paraChainBlockHeight
+  );
+
   // If not found find last volume in cache
   const cachedVolumeIn = getLastAssetVolumeFromCache(volume, swap.assetInId);
+  const cachedVolumeOut = getLastAssetVolumeFromCache(volume, swap.assetOutId);
 
   // Last known volume for total volume
   const oldAssetInVolume =
@@ -558,6 +589,19 @@ async function getAssetVolume(
     (await ctx.store.findOne(HistoricalAssetVolume, {
       where: {
         assetId: swap.assetInId,
+      },
+      order: {
+        paraChainBlockHeight: "DESC",
+      },
+    }));
+
+  // Last known volume for total volume
+  const oldAssetOutVolume =
+    currentAssetOutVolume ||
+    cachedVolumeOut ||
+    (await ctx.store.findOne(HistoricalAssetVolume, {
+      where: {
+        assetId: swap.assetOutId,
       },
       order: {
         paraChainBlockHeight: "DESC",
@@ -575,27 +619,6 @@ async function getAssetVolume(
     BigInt(0)
   );
 
-  // Find current block volume
-  const currentAssetOutVolume = volume.get(
-    swap.assetOutId + "-" + swap.paraChainBlockHeight
-  );
-
-  // If not found find last volume in cache
-  const cachedVolumeOut = getLastAssetVolumeFromCache(volume, swap.assetOutId);
-
-  // Last known volume for total volume
-  const oldAssetOutVolume =
-    currentAssetOutVolume ||
-    cachedVolumeOut ||
-    (await ctx.store.findOne(HistoricalAssetVolume, {
-      where: {
-        assetId: swap.assetOutId,
-      },
-      order: {
-        paraChainBlockHeight: "DESC",
-      },
-    }));
-
   const assetOutVolume = initAssetVolume(
     swap.assetOutId,
     swap.paraChainBlockHeight,
@@ -606,12 +629,18 @@ async function getAssetVolume(
     oldAssetOutVolume?.totalVolumeOut || BigInt(0)
   );
 
+  // Update new entry
+  assetInVolume.volumeIn += swap.assetInAmount;
+  assetInVolume.totalVolumeIn += swap.assetInAmount;
+  assetOutVolume.volumeOut += swap.assetOutAmount;
+  assetOutVolume.totalVolumeOut += swap.assetOutAmount;
+
   return [assetInVolume, assetOutVolume];
 }
 
 function initAssetVolume(
   assetId: number,
-  parachainBlockHeight: number,
+  paraChainBlockHeight: number,
   relayChainBlockHeight: number,
   volumeIn: bigint,
   volumeOut: bigint,
@@ -619,14 +648,14 @@ function initAssetVolume(
   totalVolumeOut: bigint
 ) {
   return new HistoricalAssetVolume({
-    id: assetId + "-" + parachainBlockHeight,
-    assetId: assetId,
-    volumeIn: volumeIn,
-    volumeOut: volumeOut,
-    totalVolumeIn: totalVolumeIn,
-    totalVolumeOut: totalVolumeOut,
-    relayChainBlockHeight: relayChainBlockHeight,
-    paraChainBlockHeight: parachainBlockHeight,
+    id: assetId + "-" + paraChainBlockHeight,
+    assetId,
+    volumeIn,
+    volumeOut,
+    totalVolumeIn,
+    totalVolumeOut,
+    relayChainBlockHeight,
+    paraChainBlockHeight,
   });
 }
 
@@ -654,7 +683,9 @@ function initSwap(
     assetOutId: assetOut,
     assetOutAmount: amountOut,
     assetOutFee: feeAsset === assetOut ? feeAmount : BigInt(0),
-    price: 0, // TODO: (sellEvent.sellPrice * BigInt(1000000000) / sellEvent.amount),
+    price: new BigNumber(amountIn.toString())
+      .div(amountOut.toString())
+      .toNumber(),
     pool: pool,
     relayChainBlockHeight: blockData.relayChainBlockHeight || 0,
     paraChainBlockHeight: blockData.paraChainBlockHeight,
