@@ -1,6 +1,6 @@
 manifestVersion: subsquid.io/v0.1
 name: hydradx-lbp-squid
-version: 5
+version: 6
 description: Substrate squid template
 build:
 deploy:
