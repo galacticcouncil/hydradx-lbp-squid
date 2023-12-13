@@ -64,8 +64,6 @@ type HistoricalBlockPrice @entity {
   assetBId: Int!
   assetABalance: BigInt!
   assetBBalance: BigInt!
-  assetATotalFees: BigInt!
-  assetBTotalFees: BigInt!
   relayChainBlockHeight: Int!
   paraChainBlockHeight: Int!
 }
@@ -81,6 +79,10 @@ type HistoricalVolume @entity {
   assetAVolumeOut: BigInt!
   assetATotalVolumeIn: BigInt!
   assetATotalVolumeOut: BigInt!
+  assetAFee: BigInt!
+  assetBFee: BigInt!
+  assetATotalFees: BigInt!
+  assetBTotalFees: BigInt!
   assetBVolumeIn: BigInt!
   assetBVolumeOut: BigInt!
   assetBTotalVolumeIn: BigInt!
@@ -100,7 +102,7 @@ type Swap @entity {
   assetOutId: Int!
   assetOutAmount: BigInt!
   assetOutFee: BigInt!
-  price: Float!
+  swapPrice: Float!
   pool: Pool!
   type: SwapType!
   relayChainBlockHeight: Int!

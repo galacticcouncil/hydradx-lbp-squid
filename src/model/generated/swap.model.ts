@@ -43,7 +43,7 @@ export class Swap {
     assetOutFee!: bigint
 
     @Column_("numeric", {transformer: marshal.floatTransformer, nullable: false})
-    price!: number
+    swapPrice!: number
 
     @Index_()
     @ManyToOne_(() => Pool, {nullable: true})

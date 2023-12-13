@@ -28,16 +28,28 @@ export class HistoricalVolume {
     averagePrice!: number
 
     @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
-    assetATotalVolumeIn!: bigint
-
-    @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
     assetAVolumeIn!: bigint
 
     @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
     assetAVolumeOut!: bigint
 
     @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
+    assetATotalVolumeIn!: bigint
+
+    @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
     assetATotalVolumeOut!: bigint
+
+    @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
+    assetAFee!: bigint
+
+    @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
+    assetBFee!: bigint
+
+    @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
+    assetATotalFees!: bigint
+
+    @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
+    assetBTotalFees!: bigint
 
     @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
     assetBVolumeIn!: bigint

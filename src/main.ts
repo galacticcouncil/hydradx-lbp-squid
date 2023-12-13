@@ -341,8 +341,6 @@ async function getPoolPriceData(
                 assetBId: p.assetBId,
                 assetABalance: assetABalance,
                 assetBBalance: assetBBalance,
-                assetATotalFees: BigInt(0), // TODO: Fees
-                assetBTotalFees: BigInt(0), // TODO: Fees
                 pool: p,
                 paraChainBlockHeight: blockData.paraChainBlockHeight,
                 relayChainBlockHeight: blockData.relayChainBlockHeight || 0,
@@ -446,6 +444,9 @@ function updateVolume(
     averagePrice: 0,
     assetAVolumeIn: currentVolume?.assetAVolumeIn || BigInt(0),
     assetAVolumeOut: currentVolume?.assetAVolumeOut || BigInt(0),
+    assetAFee: currentVolume?.assetAFee || BigInt(0),
+    assetATotalFees:
+      currentVolume?.assetATotalFees || oldVolume?.assetATotalFees || BigInt(0),
     assetATotalVolumeIn:
       currentVolume?.assetATotalVolumeIn ||
       oldVolume?.assetATotalVolumeIn ||
@@ -456,6 +457,9 @@ function updateVolume(
       BigInt(0),
     assetBVolumeIn: currentVolume?.assetBVolumeIn || BigInt(0),
     assetBVolumeOut: currentVolume?.assetBVolumeOut || BigInt(0),
+    assetBFee: currentVolume?.assetBFee || BigInt(0),
+    assetBTotalFees:
+      currentVolume?.assetBTotalFees || oldVolume?.assetBTotalFees || BigInt(0),
     assetBTotalVolumeIn:
       currentVolume?.assetBTotalVolumeIn ||
       oldVolume?.assetBTotalVolumeIn ||
@@ -476,44 +480,31 @@ function updateVolume(
     swap.assetOutId === newVolume.assetAId ? swap.assetOutAmount : BigInt(0);
   const assetBVolumeOut =
     swap.assetOutId === newVolume.assetBId ? swap.assetOutAmount : BigInt(0);
+  const assetAFee =
+    swap.assetInId === newVolume.assetAId ? swap.assetInFee : swap.assetOutFee;
+  const assetBFee =
+    swap.assetInId === newVolume.assetBId ? swap.assetInFee : swap.assetOutFee;
 
   newVolume.assetAVolumeIn += assetAVolumeIn;
   newVolume.assetAVolumeOut += assetAVolumeOut;
+  newVolume.assetAFee += assetAFee;
   newVolume.assetATotalVolumeIn += assetAVolumeIn;
   newVolume.assetATotalVolumeOut += assetAVolumeOut;
+  newVolume.assetATotalFees += assetAFee;
 
   newVolume.assetBVolumeIn += assetBVolumeIn;
   newVolume.assetBVolumeOut += assetBVolumeOut;
+  newVolume.assetBFee += assetBFee;
   newVolume.assetBTotalVolumeIn += assetBVolumeIn;
   newVolume.assetBTotalVolumeOut += assetBVolumeOut;
+  newVolume.assetBTotalFees += assetBFee;
 
-  const totalVolume = oldVolume
-    ? oldVolume.assetATotalVolumeIn + oldVolume.assetATotalVolumeOut
-    : BigInt(0);
-
-  const volume = newVolume.assetAVolumeIn + newVolume.assetAVolumeOut;
-
-  const price =
-    swap.assetInId === swap.pool.assetAId ? swap.price : 1 / swap.price;
-
-  const oldPrice = oldVolume?.averagePrice || 0;
-
-  const averagePrice = oldPrice
-    ? new BigNumber(totalVolume.toString())
-        .multipliedBy(oldPrice)
-        .plus(new BigNumber(volume.toString()).multipliedBy(price))
-        .dividedBy(
-          new BigNumber(totalVolume.toString()).plus(volume.toString())
-        )
-        .toNumber()
-    : price;
-
-  newVolume.averagePrice = averagePrice;
-
-  console.log("total vol:", totalVolume.toString());
-  console.log("vol:", volume.toString());
-  console.log("price:", price);
-  console.log("average price:", averagePrice);
+  newVolume.averagePrice = calculateAveragePrice(
+    swap,
+    newVolume,
+    currentVolume,
+    oldVolume
+  );
 
   return newVolume;
 }
@@ -683,7 +674,7 @@ function initSwap(
     assetOutId: assetOut,
     assetOutAmount: amountOut,
     assetOutFee: feeAsset === assetOut ? feeAmount : BigInt(0),
-    price: new BigNumber(amountIn.toString())
+    swapPrice: new BigNumber(amountIn.toString())
       .div(amountOut.toString())
       .toNumber(),
     pool: pool,
@@ -728,6 +719,36 @@ function isPoolTransfer(pools: string[], from: string, to: string): boolean {
     if (p == from || p == to) return true;
   }
   return false;
+}
+
+function calculateAveragePrice(
+  swap: Swap,
+  newVolume: HistoricalVolume,
+  currentVolume?: HistoricalVolume,
+  oldVolume?: HistoricalVolume
+) {
+  const totalVolume = oldVolume
+    ? oldVolume.assetATotalVolumeIn + oldVolume.assetATotalVolumeOut
+    : currentVolume
+    ? currentVolume.assetATotalVolumeIn + currentVolume.assetATotalVolumeOut
+    : BigInt(0);
+
+  const volume = newVolume.assetAVolumeIn + newVolume.assetAVolumeOut;
+
+  const price =
+    swap.assetInId === swap.pool.assetAId ? swap.swapPrice : 1 / swap.swapPrice;
+
+  const oldPrice = currentVolume?.averagePrice || oldVolume?.averagePrice || 0;
+
+  return oldPrice
+    ? new BigNumber(totalVolume.toString())
+        .multipliedBy(oldPrice)
+        .plus(new BigNumber(volume.toString()).multipliedBy(price))
+        .dividedBy(
+          new BigNumber(totalVolume.toString()).plus(volume.toString())
+        )
+        .toNumber()
+    : price;
 }
 
 async function getAssetBalance(

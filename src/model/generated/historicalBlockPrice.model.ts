@@ -30,12 +30,6 @@ export class HistoricalBlockPrice {
     @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
     assetBBalance!: bigint
 
-    @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
-    assetATotalFees!: bigint
-
-    @Column_("numeric", {transformer: marshal.bigintTransformer, nullable: false})
-    assetBTotalFees!: bigint
-
     @Column_("int4", {nullable: false})
     relayChainBlockHeight!: number
 
